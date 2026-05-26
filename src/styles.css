@@ -237,3 +237,16 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--moss); bord
 .hist-lines td { padding: 2px 0; }
 .hist-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
 .hist-foot strong { font-family: var(--serif); font-size: 18px; color: var(--forest); }
+
+/* ---------- invite pill buttons ---------- */
+.invite-btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.pill {
+  background: var(--cream); border: 1px solid var(--line);
+  color: var(--forest); font-size: 13px; font-weight: 600;
+  padding: 6px 12px; border-radius: 20px; cursor: pointer; width: auto;
+  font-family: var(--body); white-space: nowrap; transition: all 0.15s;
+}
+.pill:hover { background: var(--cream-2); border-color: var(--moss); }
+.pill-primary { background: var(--terracotta); color: #fff; border-color: var(--terracotta); }
+.pill-primary:hover { background: var(--clay); border-color: var(--clay); }
+.pill-ghost { background: transparent; }

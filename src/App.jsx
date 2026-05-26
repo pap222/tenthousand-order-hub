@@ -144,7 +144,7 @@ function CustomerOrder({ token }) {
     return (
       <Splash tone="success">
         <div style={{ fontSize: 48, marginBottom: 12 }}>✓</div>
-        <h2 style={{ margin: 0 }}>Order received</h2>
+        <h2 style={{ margin: 0 }}>Order received — preparing now</h2>
         <p style={{ opacity: 0.7 }}>
           Thank you {customer.name}. We'll have it ready
           {deliveryDate ? ` for ${deliveryDate}` : ""}.
@@ -193,7 +193,7 @@ function CustomerOrder({ token }) {
                 <div className="hist-top">
                   <span className="hist-date">{new Date(o.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}</span>
                   <span className={"hist-status hist-" + o.status}>
-                    {o.status === "invoiced" ? "Invoiced" : "Received"}
+                    {o.status === "invoiced" ? "Invoiced" : "Preparing"}
                   </span>
                 </div>
                 <table className="hist-lines">
@@ -623,7 +623,7 @@ function OrdersTab() {
           <div className="card-top">
             <div>
               <strong>{o.customer_name}</strong>
-              <span className={"badge badge-" + o.status}>{o.status}</span>
+              <span className={"badge badge-" + o.status}>{o.status === "invoiced" ? "invoiced" : "preparing"}</span>
             </div>
             <div className="muted">
               {new Date(o.created_at).toLocaleString("en-AU")}
@@ -845,6 +845,12 @@ function CustomersTab() {
   const [picked, setPicked] = useState(false); // a Xero contact has been chosen
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
+  const [copied, setCopied] = useState(null); // `${id}:${kind}` of last copied
+
+  function flashCopied(id, kind) {
+    setCopied(`${id}:${kind}`);
+    setTimeout(() => setCopied(null), 1500);
+  }
 
   async function load() {
     const { data } = await supabase.from("customers").select("*").order("name");
@@ -1002,11 +1008,23 @@ Ten Thousand Harvests`;
               <td>{c.name}</td>
               <td className="muted">{c.email || "—"}</td>
               <td>
-                <button className="link" onClick={() => copyInvite(c)}>copy invite</button>
-                <button className="link" onClick={() => emailInvite(c)}>email</button>
-                <button className="link" onClick={() => navigator.clipboard.writeText(`${base}/?c=${c.token}`)}>copy link</button>
+                <div className="invite-btns">
+                  <button
+                    className="pill pill-primary"
+                    onClick={() => { copyInvite(c); flashCopied(c.id, "invite"); }}
+                  >
+                    {copied === `${c.id}:invite` ? "✓ Copied" : "Copy invite"}
+                  </button>
+                  <button className="pill" onClick={() => emailInvite(c)}>Email</button>
+                  <button
+                    className="pill"
+                    onClick={() => { navigator.clipboard.writeText(`${base}/?c=${c.token}`); flashCopied(c.id, "link"); }}
+                  >
+                    {copied === `${c.id}:link` ? "✓ Copied" : "Copy link"}
+                  </button>
+                </div>
               </td>
-              <td className="r"><button className="link" onClick={() => editCustomer(c)}>edit</button></td>
+              <td className="r"><button className="pill pill-ghost" onClick={() => editCustomer(c)}>Edit</button></td>
             </tr>
           ))}
         </tbody>
