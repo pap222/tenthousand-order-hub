@@ -126,6 +126,7 @@ function CustomerOrder({ token }) {
         notes,
         lines,
         total,
+        source: "link",
       });
       if (error) throw error;
       setDone(true);
@@ -166,6 +167,7 @@ function CustomerOrder({ token }) {
   return (
     <div className="cust-wrap">
       <header className="cust-head">
+        <img src="/logo.png" alt="Ten Thousand Harvests" className="cust-logo" />
         <div className="brand">Ten Thousand Harvests</div>
         <div className="brand-sub">Micro Farming · Oura NSW</div>
         <div className="cust-name">Fresh order for <strong>{customer.name}</strong></div>
@@ -326,6 +328,20 @@ function Admin() {
   );
   const [pin, setPin] = useState("");
   const [tab, setTab] = useState("orders");
+  const [xeroConnected, setXeroConnected] = useState(null); // null=checking, true/false
+
+  async function checkXero() {
+    try {
+      const { data } = await supabase
+        .from("xero_tokens").select("tenant_id").eq("id", 1).single();
+      setXeroConnected(!!(data && data.tenant_id));
+    } catch {
+      setXeroConnected(false);
+    }
+  }
+  useEffect(() => {
+    if (sessionStorage.getItem("wfs_admin") === "1") checkXero();
+  }, []);
   const [checking, setChecking] = useState(false);
   const [pinErr, setPinErr] = useState("");
 
@@ -343,6 +359,7 @@ function Admin() {
       if (ok) {
         sessionStorage.setItem("wfs_admin", "1");
         setAuthed(true);
+        checkXero();
       } else {
         setPinErr("Wrong PIN");
       }
@@ -351,6 +368,7 @@ function Admin() {
       if (pin === import.meta.env.VITE_ADMIN_PIN) {
         sessionStorage.setItem("wfs_admin", "1");
         setAuthed(true);
+        checkXero();
       } else setPinErr("Wrong PIN");
     } finally {
       setChecking(false);
@@ -379,12 +397,18 @@ function Admin() {
   return (
     <div className="admin">
       <nav className="admin-nav">
-        <div className="brand">Ten Thousand Harvests</div>
+        <div className="brand"><img src="/logo.png" alt="" className="nav-logo" />Ten Thousand Harvests</div>
         <div className="tabs">
           <button className={tab === "orders" ? "on" : ""} onClick={() => setTab("orders")}>Orders</button>
           <button className={tab === "products" ? "on" : ""} onClick={() => setTab("products")}>Products</button>
           <button className={tab === "customers" ? "on" : ""} onClick={() => setTab("customers")}>Customers</button>
           <button className={tab === "settings" ? "on" : ""} onClick={() => setTab("settings")}>Settings</button>
+          <a
+            className={"xero-status " + (xeroConnected ? "xero-on" : "xero-off")}
+            href="/.netlify/functions/xero-auth"
+          >
+            {xeroConnected === null ? "Xero…" : xeroConnected ? "● Xero connected" : "Connect Xero"}
+          </a>
         </div>
       </nav>
       <div className="admin-body">
@@ -524,11 +548,146 @@ function SettingsTab() {
   );
 }
 
+function QuickAddOrder({ onClose, onSaved }) {
+  const [customers, setCustomers] = useState([]);
+  const [products, setProducts] = useState([]);
+  const [custSearch, setCustSearch] = useState("");
+  const [customer, setCustomer] = useState(null);
+  const [qty, setQty] = useState({});
+  const [deliveryDate, setDeliveryDate] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    (async () => {
+      const { data: cs } = await supabase.from("customers").select("*").order("name");
+      setCustomers(cs || []);
+      const { data: ps } = await supabase.from("products").select("*").eq("active", true).order("name");
+      setProducts(ps || []);
+    })();
+  }, []);
+
+  const grouped = useMemo(() => {
+    const g = {};
+    products.forEach((p) => { (g[p.category || "Other"] ||= []).push(p); });
+    return g;
+  }, [products]);
+
+  const matches = custSearch.trim()
+    ? customers.filter((c) => c.name.toLowerCase().includes(custSearch.toLowerCase())).slice(0, 6)
+    : [];
+
+  const lines = products
+    .filter((p) => (qty[p.id] || 0) > 0)
+    .map((p) => ({
+      product_id: p.id, name: p.name, unit: p.unit,
+      category: p.category, qty: qty[p.id],
+      unit_price: p.price,
+      line_total: Math.round(qty[p.id] * p.price * 100) / 100,
+    }));
+  const total = lines.reduce((s, l) => s + l.line_total, 0);
+
+  async function save() {
+    if (!customer || !lines.length) return;
+    setSaving(true); setErr("");
+    try {
+      const { error } = await supabase.from("orders").insert({
+        customer_id: customer.id,
+        customer_name: customer.name,
+        status: "new",
+        delivery_date: deliveryDate || null,
+        notes,
+        lines,
+        total,
+        source: "phone",
+      });
+      if (error) throw error;
+      onSaved();
+    } catch (e) {
+      setErr("Couldn't save: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-head">
+          <h3>📞 Quick add order</h3>
+          <button className="modal-x" onClick={onClose}>✕</button>
+        </div>
+
+        {!customer ? (
+          <div>
+            <label className="fld"><span>Which customer?</span>
+              <input autoFocus value={custSearch} onChange={(e) => setCustSearch(e.target.value)} placeholder="Start typing a name…" />
+            </label>
+            {matches.map((c) => (
+              <button key={c.id} className="cust-pick" onClick={() => setCustomer(c)}>{c.name}</button>
+            ))}
+            {custSearch && !matches.length && <p className="muted">No match. (Customers come from Xero — sync if missing.)</p>}
+          </div>
+        ) : (
+          <div>
+            <div className="picked-row" style={{ marginBottom: 12 }}>
+              <strong>{customer.name}</strong>
+              <button className="link" onClick={() => { setCustomer(null); setQty({}); }}>change</button>
+            </div>
+
+            {Object.entries(grouped).map(([cat, items]) => (
+              <section key={cat} className="cat">
+                <h3 className="cat-title">{cat}</h3>
+                {items.map((p) => (
+                  <div className="row" key={p.id}>
+                    <div className="row-info">
+                      <div className="row-name">{p.name}</div>
+                      <div className="row-sub">{AUD(p.price)} / {p.unit}</div>
+                    </div>
+                    <Stepper
+                      value={qty[p.id] || 0}
+                      byWeight={p.sold_by_weight}
+                      unit={p.unit}
+                      onChange={(v) => setQty({ ...qty, [p.id]: v })}
+                    />
+                  </div>
+                ))}
+              </section>
+            ))}
+
+            <label className="fld"><span>Delivery date</span>
+              <input type="date" value={deliveryDate} onChange={(e) => setDeliveryDate(e.target.value)} />
+            </label>
+            <label className="fld"><span>Notes (optional)</span>
+              <textarea rows={2} value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Anything to note…" />
+            </label>
+
+            <div className="modal-foot">
+              <strong>{AUD(total)}</strong>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn-ghost" onClick={onClose}>Cancel</button>
+                <button className="btn-primary sm" disabled={saving || !lines.length} onClick={save}>
+                  {saving ? "Adding…" : "Add to active orders"}
+                </button>
+              </div>
+            </div>
+            {err && <div className="err">{err}</div>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function OrdersTab() {
   const [orders, setOrders] = useState([]);
   const [busy, setBusy] = useState(null);
   const [editing, setEditing] = useState(null); // order id being edited
   const [draftLines, setDraftLines] = useState([]); // working copy of lines
+  const [draftMsg, setDraftMsg] = useState(""); // invoice message while editing
+  const [quickAdd, setQuickAdd] = useState(false); // quick-add modal open
+  const [showShipped, setShowShipped] = useState(false);
 
   async function load() {
     const { data } = await supabase
@@ -541,22 +700,60 @@ function OrdersTab() {
     load();
   }, []);
 
+  async function setShipped(orderId, value) {
+    setBusy(orderId);
+    try {
+      await supabase.from("orders").update({ archived: value }).eq("id", orderId);
+      await load();
+    } catch (e) {
+      alert("Couldn't update: " + e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function deleteOrder(o) {
+    if (!confirm(`Delete this order from ${o.customer_name}? This can't be undone. (If it's already invoiced in Xero, the invoice stays in Xero.)`)) return;
+    setBusy(o.id);
+    try {
+      await supabase.from("orders").delete().eq("id", o.id);
+      await load();
+    } catch (e) {
+      alert("Couldn't delete: " + e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const visibleOrders = orders.filter((o) => !!o.archived === showShipped);
+  const shippedCount = orders.filter((o) => o.archived).length;
+  const activeCount = orders.filter((o) => !o.archived).length;
+
   function startEdit(o) {
     setEditing(o.id);
     // deep copy so edits don't mutate the displayed order until saved
     setDraftLines((o.lines || []).map((l) => ({ ...l })));
+    setDraftMsg(o.invoice_message || "");
   }
 
   function cancelEdit() {
     setEditing(null);
     setDraftLines([]);
+    setDraftMsg("");
   }
 
   function updateLine(i, field, raw) {
     const next = draftLines.map((l) => ({ ...l }));
     const v = parseFloat(String(raw).replace(/[^0-9.]/g, ""));
     next[i][field] = isNaN(v) ? 0 : v;
-    next[i].line_total = Math.round((next[i].qty || 0) * (next[i].unit_price || 0) * 100) / 100;
+    next[i].line_total = next[i].unavailable ? 0 : Math.round((next[i].qty || 0) * (next[i].unit_price || 0) * 100) / 100;
+    setDraftLines(next);
+  }
+
+  function toggleUnavailable(i) {
+    const next = draftLines.map((l) => ({ ...l }));
+    next[i].unavailable = !next[i].unavailable;
+    next[i].line_total = next[i].unavailable ? 0 : Math.round((next[i].qty || 0) * (next[i].unit_price || 0) * 100) / 100;
     setDraftLines(next);
   }
 
@@ -568,7 +765,7 @@ function OrdersTab() {
       const total = Math.round(draftTotal * 100) / 100;
       const { error } = await supabase
         .from("orders")
-        .update({ lines: draftLines, total })
+        .update({ lines: draftLines, total, invoice_message: draftMsg || null })
         .eq("id", orderId);
       if (error) throw error;
       cancelEdit();
@@ -611,18 +808,34 @@ function OrdersTab() {
   return (
     <div>
       <div className="bar">
-        <h2>Orders</h2>
-        <a className="btn-ghost" href="/.netlify/functions/xero-auth">
-          Connect Xero
-        </a>
+        <div className="order-tabs" style={{ marginBottom: 0, border: "none" }}>
+          <button
+            className={!showShipped ? "on" : ""}
+            onClick={() => setShowShipped(false)}
+          >Active ({activeCount})</button>
+          <button
+            className={showShipped ? "on" : ""}
+            onClick={() => setShowShipped(true)}
+          >Shipped ({shippedCount})</button>
+        </div>
+        <button className="btn-primary sm" onClick={() => setQuickAdd(true)}>+ Quick add order</button>
       </div>
-      {orders.map((o) => {
+      {quickAdd && (
+        <QuickAddOrder
+          onClose={() => setQuickAdd(false)}
+          onSaved={() => { setQuickAdd(false); setShowShipped(false); load(); }}
+        />
+      )}
+      {visibleOrders.map((o) => {
         const isEditing = editing === o.id;
         return (
         <div className="card" key={o.id}>
           <div className="card-top">
             <div>
               <strong>{o.customer_name}</strong>
+              <span className="src-icon" title={o.source === "phone" ? "Added manually (phone/text order)" : "Ordered via their link"}>
+                {o.source === "phone" ? "📞" : "🔗"}
+              </span>
               <span className={"badge badge-" + o.status}>{o.status === "invoiced" ? "invoiced" : "preparing"}</span>
             </div>
             <div className="muted">
@@ -633,7 +846,7 @@ function OrdersTab() {
           <table className="lines">
             <tbody>
               {(isEditing ? draftLines : (o.lines || [])).map((l, i) => (
-                <tr key={i}>
+                <tr key={i} className={l.unavailable ? "line-unavail" : ""}>
                   {isEditing ? (
                     <>
                       <td>
@@ -642,8 +855,16 @@ function OrdersTab() {
                           inputMode="decimal"
                           value={l.qty}
                           onChange={(e) => updateLine(i, "qty", e.target.value)}
+                          disabled={l.unavailable}
                         />
                         <span className="muted"> {l.unit} × {l.name}</span>
+                        <button
+                          className={"avail-toggle " + (l.unavailable ? "is-unavail" : "")}
+                          onClick={() => toggleUnavailable(i)}
+                          title="Mark item as unavailable (removes it from the invoice)"
+                        >
+                          {l.unavailable ? "✕ unavailable" : "mark unavailable"}
+                        </button>
                       </td>
                       <td className="r">
                         @ <input
@@ -651,15 +872,19 @@ function OrdersTab() {
                           inputMode="decimal"
                           value={l.unit_price}
                           onChange={(e) => updateLine(i, "unit_price", e.target.value)}
+                          disabled={l.unavailable}
                         />
                       </td>
-                      <td className="r">{AUD(l.line_total)}</td>
+                      <td className="r">{l.unavailable ? "—" : AUD(l.line_total)}</td>
                     </>
                   ) : (
                     <>
-                      <td>{l.qty} {l.unit ? l.unit + " " : ""}× {l.name}</td>
-                      <td className="r muted">@ {AUD(l.unit_price)}</td>
-                      <td className="r">{AUD(l.line_total)}</td>
+                      <td>
+                        {l.qty} {l.unit ? l.unit + " " : ""}× {l.name}
+                        {l.unavailable && <span className="unavail-tag">unavailable</span>}
+                      </td>
+                      <td className="r muted">{l.unavailable ? "" : "@ " + AUD(l.unit_price)}</td>
+                      <td className="r">{l.unavailable ? "—" : AUD(l.line_total)}</td>
                     </>
                   )}
                 </tr>
@@ -667,24 +892,39 @@ function OrdersTab() {
             </tbody>
           </table>
 
+          {isEditing && (
+            <label className="fld" style={{ marginTop: 10 }}>
+              <span>Message on invoice (optional — prints on the Xero invoice)</span>
+              <textarea
+                rows={2}
+                value={draftMsg}
+                placeholder="e.g. Lion's mane unavailable this week — thanks for your order!"
+                onChange={(e) => setDraftMsg(e.target.value)}
+              />
+            </label>
+          )}
+
           {o.delivery_date && (
             <div className="muted">Deliver: {o.delivery_date}</div>
           )}
           {o.notes && <div className="muted">Note: {o.notes}</div>}
+          {!isEditing && o.invoice_message && (
+            <div className="muted">✉ Invoice message: {o.invoice_message}</div>
+          )}
           {o.egg_batch && (
             <div className="batch-note">🥚 Egg batch: <strong>{o.egg_batch}</strong> (on invoice)</div>
           )}
 
           <div className="card-foot">
             <strong>{AUD(isEditing ? draftTotal : o.total)}</strong>
-            <div style={{ display: "flex", gap: 8 }}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
               {o.status === "invoiced" ? (
                 <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                   <span className="ok">✓ {o.xero_invoice_number || "In Xero"}</span>
                   {o.xero_invoice_id && (
                     <a
                       className="btn-ghost"
-                      href={`https://go.xero.com/app/invoicing/edit/${o.xero_invoice_id}`}
+                      href={`https://go.xero.com/app/!/invoicing/view/${o.xero_invoice_id}`}
                       target="_blank"
                       rel="noopener noreferrer"
                     >
@@ -711,12 +951,28 @@ function OrdersTab() {
                   </button>
                 </>
               )}
+              {!isEditing && (
+                o.archived ? (
+                  <button className="btn-ghost" disabled={busy === o.id} onClick={() => setShipped(o.id, false)}>
+                    {busy === o.id ? "…" : "Move to active"}
+                  </button>
+                ) : (
+                  <button className="btn-primary sm" disabled={busy === o.id} onClick={() => setShipped(o.id, true)}>
+                    {busy === o.id ? "…" : "Mark shipped"}
+                  </button>
+                )
+              )}
+              {!isEditing && (
+                <button className="pill pill-danger" disabled={busy === o.id} onClick={() => deleteOrder(o)}>Delete</button>
+              )}
             </div>
           </div>
         </div>
         );
       })}
-      {!orders.length && <p className="muted">No orders yet.</p>}
+      {visibleOrders.length === 0 && (
+        <p className="muted">{showShipped ? "No shipped orders yet." : "No active orders."}</p>
+      )}
     </div>
   );
 }
@@ -766,8 +1022,8 @@ function ProductsTab() {
     load();
   }
 
-  // Xero "add item" page (new tab)
-  const XERO_ITEMS_URL = "https://go.xero.com/Items/Items.aspx";
+  // Xero "products & services" page (new tab)
+  const XERO_ITEMS_URL = "https://go.xero.com/app/!/products-and-services";
 
   return (
     <div>
@@ -817,7 +1073,7 @@ function ProductsTab() {
               <td className="r">{AUD(p.price)}</td>
               <td>
                 <button className="link" onClick={() => toggleActive(p)}>
-                  {p.active ? "shown" : "hidden"}
+                  {p.active ? "Available" : "Unavailable"}
                 </button>
               </td>
               <td className="r">
@@ -932,6 +1188,12 @@ function CustomersTab() {
     setResults([]);
   }
 
+  async function deleteCustomer(c) {
+    if (!confirm(`Delete ${c.name}? This removes them from the order system (not from Xero). Their order link will stop working.`)) return;
+    await supabase.from("customers").delete().eq("id", c.id);
+    load();
+  }
+
   const base = window.location.origin;
 
   function inviteMessage(c) {
@@ -970,7 +1232,7 @@ Ten Thousand Harvests`;
       <div className="bar">
         <h2>Customers</h2>
         <div style={{ display: "flex", gap: 8 }}>
-          <a className="btn-ghost" href="https://go.xero.com/Contacts/" target="_blank" rel="noopener noreferrer">
+          <a className="btn-ghost" href="https://go.xero.com/app/!/contacts" target="_blank" rel="noopener noreferrer">
             + Add in Xero ↗
           </a>
           <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
@@ -1024,7 +1286,7 @@ Ten Thousand Harvests`;
                   </button>
                 </div>
               </td>
-              <td className="r"><button className="pill pill-ghost" onClick={() => editCustomer(c)}>Edit</button></td>
+              <td className="r"><button className="pill pill-ghost" onClick={() => editCustomer(c)}>Edit</button> <button className="pill pill-danger" onClick={() => deleteCustomer(c)}>Delete</button></td>
             </tr>
           ))}
         </tbody>

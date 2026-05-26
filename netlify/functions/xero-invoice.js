@@ -113,16 +113,23 @@ exports.handler = async (event) => {
       Reference: `Order #${order.id}`,
       Status: "AUTHORISED", // <-- FINALISED
       LineAmountTypes: "Exclusive",
-      LineItems: (order.lines || []).map((l) => ({
-        Description: isEgg(l)
-          ? `${l.name} (${l.unit}) - Batch ${batch}`
-          : `${l.name} (${l.unit})`,
-        Quantity: l.qty,
-        UnitAmount: l.unit_price,
-        AccountCode: process.env.XERO_SALES_ACCOUNT || "200",
-        TaxType: "EXEMPTOUTPUT", // GST-free fresh produce; change per item if needed
-      })),
+      LineItems: (order.lines || [])
+        .filter((l) => !l.unavailable)
+        .map((l) => ({
+          Description: isEgg(l)
+            ? `${l.name} (${l.unit}) - Batch ${batch}`
+            : `${l.name} (${l.unit})`,
+          Quantity: l.qty,
+          UnitAmount: l.unit_price,
+          AccountCode: process.env.XERO_SALES_ACCOUNT || "200",
+          TaxType: "EXEMPTOUTPUT", // GST-free fresh produce; change per item if needed
+        })),
     };
+
+    // Optional message printed on the invoice.
+    if (order.invoice_message) {
+      invoice.Reference = `Order #${order.id} — ${order.invoice_message}`.slice(0, 255);
+    }
 
     // 3. POST to Xero
     const res = await fetch("https://api.xero.com/api.xro/2.0/Invoices", {

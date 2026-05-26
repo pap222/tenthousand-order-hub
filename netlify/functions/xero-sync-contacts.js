@@ -70,16 +70,21 @@ exports.handler = async () => {
     let added = 0, updated = 0;
     for (const c of all) {
       const match = byXeroId[c.ContactID];
+      const email = c.EmailAddress || null;
       if (match) {
-        if (match.name !== c.Name) {
-          await supabase.from("customers").update({ name: c.Name }).eq("id", match.id);
+        // update name and email if either changed (don't wipe an email Rick typed manually if Xero has none)
+        const patch = {};
+        if (match.name !== c.Name) patch.name = c.Name;
+        if (email && match.email !== email) patch.email = email;
+        if (Object.keys(patch).length) {
+          await supabase.from("customers").update(patch).eq("id", match.id);
           updated++;
         }
       } else {
         await supabase.from("customers").insert({
           name: c.Name,
           xero_contact_id: c.ContactID,
-          email: c.EmailAddress || null,
+          email,
           token: genToken(),
         });
         added++;
