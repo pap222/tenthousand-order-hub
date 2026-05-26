@@ -213,3 +213,27 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--moss); bord
   background: rgba(197,112,63,0.12); border: 1px solid var(--terracotta);
   border-radius: 6px; color: var(--clay); display: inline-block;
 }
+
+/* ---------- chef order history ---------- */
+.cust-tabs { display: flex; gap: 6px; margin-top: 12px; }
+.cust-tabs button {
+  flex: 1; background: rgba(247,243,233,0.15); color: var(--cream);
+  border: none; padding: 9px; border-radius: 8px; font-size: 14px; cursor: pointer;
+  font-family: var(--body);
+}
+.cust-tabs button.on { background: var(--cream); color: var(--forest); font-weight: 700; }
+
+.hist-card {
+  background: var(--paper); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px 16px; margin: 12px 16px;
+  box-shadow: var(--shadow);
+}
+.hist-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.hist-date { font-family: var(--serif); font-size: 16px; color: var(--forest); font-weight: 600; }
+.hist-status { font-size: 11px; padding: 3px 10px; border-radius: 20px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 700; }
+.hist-new { background: var(--moss); color: #fff; }
+.hist-invoiced { background: var(--cream-2); color: var(--muted); }
+.hist-lines { width: 100%; font-size: 14px; margin-bottom: 6px; }
+.hist-lines td { padding: 2px 0; }
+.hist-foot { display: flex; justify-content: space-between; align-items: center; margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--line); }
+.hist-foot strong { font-family: var(--serif); font-size: 18px; color: var(--forest); }

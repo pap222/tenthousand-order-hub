@@ -41,6 +41,25 @@ function CustomerOrder({ token }) {
   const [placing, setPlacing] = useState(false);
   const [done, setDone] = useState(false);
   const [err, setErr] = useState("");
+  const [view, setView] = useState("order"); // "order" | "history"
+  const [myOrders, setMyOrders] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
+
+  async function loadMyOrders(custId) {
+    setLoadingOrders(true);
+    try {
+      const { data } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("customer_id", custId)
+        .order("created_at", { ascending: false });
+      setMyOrders(data || []);
+    } catch (_) {
+      setMyOrders([]);
+    } finally {
+      setLoadingOrders(false);
+    }
+  }
 
   useEffect(() => {
     (async () => {
@@ -150,8 +169,57 @@ function CustomerOrder({ token }) {
         <div className="brand">Ten Thousand Harvests</div>
         <div className="brand-sub">Micro Farming · Oura NSW</div>
         <div className="cust-name">Fresh order for <strong>{customer.name}</strong></div>
+        <div className="cust-tabs">
+          <button
+            className={view === "order" ? "on" : ""}
+            onClick={() => setView("order")}
+          >New order</button>
+          <button
+            className={view === "history" ? "on" : ""}
+            onClick={() => { setView("history"); loadMyOrders(customer.id); }}
+          >My orders</button>
+        </div>
       </header>
 
+      {view === "history" ? (
+        <main className="cust-main">
+          {loadingOrders ? (
+            <p className="muted" style={{ padding: 16 }}>Loading your orders…</p>
+          ) : myOrders.length === 0 ? (
+            <p className="muted" style={{ padding: 16 }}>No orders yet. Tap “New order” to place one.</p>
+          ) : (
+            myOrders.map((o) => (
+              <div className="hist-card" key={o.id}>
+                <div className="hist-top">
+                  <span className="hist-date">{new Date(o.created_at).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })}</span>
+                  <span className={"hist-status hist-" + o.status}>
+                    {o.status === "invoiced" ? "Invoiced" : "Received"}
+                  </span>
+                </div>
+                <table className="hist-lines">
+                  <tbody>
+                    {(o.lines || []).map((l, i) => (
+                      <tr key={i}>
+                        <td>{l.qty} {l.unit ? l.unit + " " : ""}× {l.name}</td>
+                        <td className="r">{AUD(l.line_total)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {o.delivery_date && <div className="muted">Deliver: {o.delivery_date}</div>}
+                <div className="hist-foot">
+                  <strong>{AUD(o.total)}</strong>
+                  {o.status === "invoiced" && o.xero_online_url && (
+                    <a className="btn-ghost" href={o.xero_online_url} target="_blank" rel="noopener noreferrer">
+                      View invoice ↗
+                    </a>
+                  )}
+                </div>
+              </div>
+            ))
+          )}
+        </main>
+      ) : (
       <main className="cust-main">
         {Object.entries(grouped).map(([cat, items]) => (
           <section key={cat} className="cat">
@@ -196,8 +264,9 @@ function CustomerOrder({ token }) {
           </label>
         </section>
       </main>
+      )}
 
-      {lines.length > 0 && (
+      {view === "order" && lines.length > 0 && (
         <footer className="cust-foot">
           <div className="foot-summary">
             <span>{lines.length} item{lines.length > 1 ? "s" : ""}</span>
@@ -528,6 +597,7 @@ function OrdersTab() {
           xero_invoice_id: out.invoiceId,
           xero_invoice_number: out.invoiceNumber,
           egg_batch: out.eggBatch || null,
+          xero_online_url: out.onlineUrl || null,
         })
         .eq("id", order.id);
       await load();

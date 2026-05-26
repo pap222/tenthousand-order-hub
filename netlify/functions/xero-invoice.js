@@ -146,12 +146,33 @@ exports.handler = async (event) => {
 
     const inv = out.Invoices[0];
     const eggBatchUsed = (order.lines || []).some(isEgg) ? batch : null;
+
+    // 4. Fetch the public "online invoice" URL (safe to share with the chef).
+    let onlineUrl = null;
+    try {
+      const urlRes = await fetch(
+        `https://api.xero.com/api.xro/2.0/Invoices/${inv.InvoiceID}/OnlineInvoice`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Xero-tenant-id": tenantId,
+            Accept: "application/json",
+          },
+        }
+      );
+      if (urlRes.ok) {
+        const u = await urlRes.json();
+        onlineUrl = u.OnlineInvoices?.[0]?.OnlineInvoiceUrl || null;
+      }
+    } catch (_) { /* non-fatal: invoice still created */ }
+
     return {
       statusCode: 200,
       body: JSON.stringify({
         invoiceId: inv.InvoiceID,
         invoiceNumber: inv.InvoiceNumber,
         eggBatch: eggBatchUsed,
+        onlineUrl,
       }),
     };
   } catch (e) {
