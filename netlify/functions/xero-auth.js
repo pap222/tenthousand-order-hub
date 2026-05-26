@@ -9,7 +9,7 @@ exports.handler = async (event) => {
     "openid",
     "profile",
     "email",
-    "accounting.transactions",
+    "accounting.invoices",
     "offline_access",
   ].join(" ");
 
