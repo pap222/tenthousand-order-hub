@@ -79,6 +79,7 @@ exports.handler = async () => {
         await supabase.from("customers").insert({
           name: c.Name,
           xero_contact_id: c.ContactID,
+          email: c.EmailAddress || null,
           token: genToken(),
         });
         added++;

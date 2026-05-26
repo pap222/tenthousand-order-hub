@@ -62,12 +62,16 @@ exports.handler = async () => {
     let added = 0, updated = 0;
     for (const it of items) {
       const price = it.SalesDetails?.UnitPrice ?? 0;
+      // guess if sold by weight from any unit hint on the item
+      const unitHint = ((it.SalesDetails?.TaxType || "") + " " + (it.Name || "")).toLowerCase();
+      const byWeight = /\b(kg|kilo|gram|\/kg|per kg|weight)\b/.test(unitHint) || /mushroom/.test((it.Name||"").toLowerCase());
       const row = {
         name: it.Name || it.Code,
         category: guessCategory(it.Name),
-        unit: "each",
+        unit: byWeight ? "kg" : "each",
         price,
         active: true,
+        sold_by_weight: byWeight,
         xero_item_id: it.ItemID,
         xero_code: it.Code || null,
       };

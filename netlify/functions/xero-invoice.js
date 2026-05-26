@@ -61,6 +61,48 @@ exports.handler = async (event) => {
 
     const { token, tenantId } = await getValidToken();
 
+    // ---- Configurable egg batch ----
+    // Load batch settings (single row id=1).
+    const { data: cfg } = await supabase
+      .from("app_settings")
+      .select("batch_prefix, batch_include_date, batch_suffix_num, batch_rollover_hour, batch_last_rolled")
+      .eq("id", 1).single();
+    const s = cfg || {};
+
+    // "Batch day" in Sydney time, shifted by the rollover hour.
+    // e.g. rollover 6 means before 6am still counts as the previous day.
+    const now = new Date();
+    const syd = new Date(now.toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
+    const rollHour = Number.isInteger(s.batch_rollover_hour) ? s.batch_rollover_hour : 0;
+    syd.setHours(syd.getHours() - rollHour);
+    const y = syd.getFullYear();
+    const m = String(syd.getMonth() + 1).padStart(2, "0");
+    const d = String(syd.getDate()).padStart(2, "0");
+    const batchDay = `${y}-${m}-${d}`;            // e.g. 2026-05-26
+    const dateStr = `${y}${m}${d}`;               // e.g. 20260526
+
+    // Auto-increment the suffix if a new batch-day has begun since last roll.
+    let suffix = Number.isInteger(s.batch_suffix_num) ? s.batch_suffix_num : 1;
+    if (s.batch_last_rolled !== batchDay) {
+      // only bump if we'd rolled before (avoid bumping on very first ever push)
+      if (s.batch_last_rolled) suffix = suffix + 1;
+      await supabase.from("app_settings")
+        .update({ batch_suffix_num: suffix, batch_last_rolled: batchDay })
+        .eq("id", 1);
+    }
+
+    const prefix = (s.batch_prefix || "").trim();
+    const includeDate = s.batch_include_date !== false; // default true
+    const parts = [];
+    if (prefix) parts.push(prefix);
+    if (includeDate) parts.push(dateStr);
+    parts.push(String(suffix));
+    const batch = parts.join("-");
+
+    const isEgg = (l) =>
+      (l.category || "").toLowerCase() === "eggs" ||
+      /\begg\b/i.test(l.name || "");
+
     // 2. Build invoice. Fresh produce = GST free (zero-rated).
     //    Adjust TaxType / AccountCode to match your Xero chart of accounts.
     const invoice = {
@@ -72,7 +114,9 @@ exports.handler = async (event) => {
       Status: "AUTHORISED", // <-- FINALISED
       LineAmountTypes: "Exclusive",
       LineItems: (order.lines || []).map((l) => ({
-        Description: `${l.name} (${l.unit})`,
+        Description: isEgg(l)
+          ? `${l.name} (${l.unit}) - Batch ${batch}`
+          : `${l.name} (${l.unit})`,
         Quantity: l.qty,
         UnitAmount: l.unit_price,
         AccountCode: process.env.XERO_SALES_ACCOUNT || "200",
@@ -101,11 +145,13 @@ exports.handler = async (event) => {
     }
 
     const inv = out.Invoices[0];
+    const eggBatchUsed = (order.lines || []).some(isEgg) ? batch : null;
     return {
       statusCode: 200,
       body: JSON.stringify({
         invoiceId: inv.InvoiceID,
         invoiceNumber: inv.InvoiceNumber,
+        eggBatch: eggBatchUsed,
       }),
     };
   } catch (e) {

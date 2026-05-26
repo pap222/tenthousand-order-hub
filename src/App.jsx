@@ -76,6 +76,7 @@ function CustomerOrder({ token }) {
           product_id: p.id,
           name: p.name,
           unit: p.unit,
+          category: p.category,
           qty: Number(qty[p.id]),
           unit_price: Number(p.price),
           line_total: Number(qty[p.id]) * Number(p.price),
@@ -166,6 +167,8 @@ function CustomerOrder({ token }) {
                 <Stepper
                   value={Number(qty[p.id]) || 0}
                   onChange={(v) => setQty({ ...qty, [p.id]: v })}
+                  byWeight={p.sold_by_weight}
+                  unit={p.unit}
                 />
               </div>
             ))}
@@ -214,18 +217,33 @@ function CustomerOrder({ token }) {
   );
 }
 
-function Stepper({ value, onChange }) {
+function Stepper({ value, onChange, byWeight, unit }) {
+  // weight items step by 0.5 and allow decimals; count items step by 1, whole only
+  const step = byWeight ? 0.5 : 1;
+  const dec = (n) => Math.round(n * 100) / 100; // avoid float noise
+
   return (
-    <div className="stepper">
-      <button onClick={() => onChange(Math.max(0, value - 1))}>−</button>
-      <input
-        value={value}
-        onChange={(e) => {
-          const v = parseInt(e.target.value.replace(/\D/g, "") || "0", 10);
-          onChange(v);
-        }}
-      />
-      <button onClick={() => onChange(value + 1)}>+</button>
+    <div className="stepper-wrap">
+      <div className="stepper">
+        <button onClick={() => onChange(dec(Math.max(0, value - step)))}>−</button>
+        <input
+          inputMode={byWeight ? "decimal" : "numeric"}
+          value={value}
+          onChange={(e) => {
+            const raw = e.target.value;
+            if (byWeight) {
+              const cleaned = raw.replace(/[^0-9.]/g, "");
+              const v = parseFloat(cleaned);
+              onChange(isNaN(v) ? 0 : v);
+            } else {
+              const v = parseInt(raw.replace(/\D/g, "") || "0", 10);
+              onChange(v);
+            }
+          }}
+        />
+        <button onClick={() => onChange(dec(value + step))}>+</button>
+      </div>
+      {byWeight && value > 0 && <div className="stepper-unit">{unit}</div>}
     </div>
   );
 }
@@ -239,6 +257,36 @@ function Admin() {
   );
   const [pin, setPin] = useState("");
   const [tab, setTab] = useState("orders");
+  const [checking, setChecking] = useState(false);
+  const [pinErr, setPinErr] = useState("");
+
+  async function tryLogin() {
+    setChecking(true);
+    setPinErr("");
+    try {
+      // Look up the PIN stored in the database first.
+      const { data } = await supabase
+        .from("app_settings").select("admin_pin").eq("id", 1).single();
+      const dbPin = data?.admin_pin;
+      const envPin = import.meta.env.VITE_ADMIN_PIN;
+      // DB pin wins if set; env pin is always accepted as a fallback so you can't be locked out.
+      const ok = (dbPin && pin === dbPin) || (envPin && pin === envPin);
+      if (ok) {
+        sessionStorage.setItem("wfs_admin", "1");
+        setAuthed(true);
+      } else {
+        setPinErr("Wrong PIN");
+      }
+    } catch {
+      // if settings table not reachable, fall back to env pin
+      if (pin === import.meta.env.VITE_ADMIN_PIN) {
+        sessionStorage.setItem("wfs_admin", "1");
+        setAuthed(true);
+      } else setPinErr("Wrong PIN");
+    } finally {
+      setChecking(false);
+    }
+  }
 
   if (!authed)
     return (
@@ -250,18 +298,12 @@ function Admin() {
           placeholder="PIN"
           value={pin}
           onChange={(e) => setPin(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && tryLogin()}
         />
-        <button
-          className="btn-primary"
-          onClick={() => {
-            if (pin === import.meta.env.VITE_ADMIN_PIN) {
-              sessionStorage.setItem("wfs_admin", "1");
-              setAuthed(true);
-            } else alert("Wrong PIN");
-          }}
-        >
-          Enter
+        <button className="btn-primary" disabled={checking} onClick={tryLogin}>
+          {checking ? "Checking…" : "Enter"}
         </button>
+        {pinErr && <div className="err">{pinErr}</div>}
       </Splash>
     );
 
@@ -273,13 +315,142 @@ function Admin() {
           <button className={tab === "orders" ? "on" : ""} onClick={() => setTab("orders")}>Orders</button>
           <button className={tab === "products" ? "on" : ""} onClick={() => setTab("products")}>Products</button>
           <button className={tab === "customers" ? "on" : ""} onClick={() => setTab("customers")}>Customers</button>
+          <button className={tab === "settings" ? "on" : ""} onClick={() => setTab("settings")}>Settings</button>
         </div>
       </nav>
       <div className="admin-body">
         {tab === "orders" && <OrdersTab />}
         {tab === "products" && <ProductsTab />}
         {tab === "customers" && <CustomersTab />}
+        {tab === "settings" && <SettingsTab />}
       </div>
+    </div>
+  );
+}
+
+function SettingsTab() {
+  const [newPin, setNewPin] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [msg, setMsg] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  // egg batch config
+  const [batch, setBatch] = useState(null);
+  const [batchMsg, setBatchMsg] = useState("");
+  const [batchSaving, setBatchSaving] = useState(false);
+
+  useEffect(() => {
+    (async () => {
+      const { data } = await supabase
+        .from("app_settings")
+        .select("batch_prefix, batch_include_date, batch_suffix_num, batch_rollover_hour")
+        .eq("id", 1).single();
+      setBatch({
+        batch_prefix: data?.batch_prefix || "",
+        batch_include_date: data?.batch_include_date !== false,
+        batch_suffix_num: data?.batch_suffix_num ?? 1,
+        batch_rollover_hour: data?.batch_rollover_hour ?? 0,
+      });
+    })();
+  }, []);
+
+  async function savePin() {
+    setMsg("");
+    if (newPin.length < 4) { setMsg("PIN should be at least 4 characters."); return; }
+    if (newPin !== confirm) { setMsg("PINs don't match."); return; }
+    setSaving(true);
+    try {
+      const { error } = await supabase
+        .from("app_settings").update({ admin_pin: newPin }).eq("id", 1);
+      if (error) throw error;
+      setMsg("✓ Admin PIN updated. Use it next time you log in.");
+      setNewPin(""); setConfirm("");
+    } catch (e) {
+      setMsg("Couldn't save: " + e.message);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveBatch() {
+    setBatchMsg("");
+    setBatchSaving(true);
+    try {
+      const { error } = await supabase.from("app_settings").update({
+        batch_prefix: batch.batch_prefix.trim(),
+        batch_include_date: batch.batch_include_date,
+        batch_suffix_num: parseInt(batch.batch_suffix_num, 10) || 1,
+        batch_rollover_hour: parseInt(batch.batch_rollover_hour, 10) || 0,
+      }).eq("id", 1);
+      if (error) throw error;
+      setBatchMsg("✓ Egg batch settings saved.");
+    } catch (e) {
+      setBatchMsg("Couldn't save: " + e.message);
+    } finally {
+      setBatchSaving(false);
+    }
+  }
+
+  // live preview of today's batch (Sydney time, with rollover hour)
+  function previewBatch() {
+    if (!batch) return "";
+    const syd = new Date(new Date().toLocaleString("en-US", { timeZone: "Australia/Sydney" }));
+    syd.setHours(syd.getHours() - (parseInt(batch.batch_rollover_hour, 10) || 0));
+    const y = syd.getFullYear();
+    const m = String(syd.getMonth() + 1).padStart(2, "0");
+    const d = String(syd.getDate()).padStart(2, "0");
+    const parts = [];
+    if (batch.batch_prefix.trim()) parts.push(batch.batch_prefix.trim());
+    if (batch.batch_include_date) parts.push(`${y}${m}${d}`);
+    parts.push(String(parseInt(batch.batch_suffix_num, 10) || 1));
+    return parts.join("-");
+  }
+
+  return (
+    <div>
+      <h2>Settings</h2>
+
+      <h3 style={{ fontFamily: "var(--serif)", color: "var(--forest)" }}>Admin PIN</h3>
+      <div className="editor" style={{ flexDirection: "column", alignItems: "stretch", maxWidth: 380 }}>
+        <label className="fld"><span>New admin PIN</span>
+          <input type="password" value={newPin} onChange={(e) => setNewPin(e.target.value)} placeholder="New PIN" />
+        </label>
+        <label className="fld"><span>Confirm new PIN</span>
+          <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Repeat PIN" />
+        </label>
+        <button className="btn-primary" style={{ width: "auto" }} disabled={saving} onClick={savePin}>
+          {saving ? "Saving…" : "Change PIN"}
+        </button>
+        {msg && <div className={msg.startsWith("✓") ? "ok" : "err"} style={{ marginTop: 8 }}>{msg}</div>}
+      </div>
+      <p className="muted" style={{ marginTop: 8 }}>The PIN opens this admin area. The original setup PIN always keeps working as a backup.</p>
+
+      <h3 style={{ fontFamily: "var(--serif)", color: "var(--forest)", marginTop: 28 }}>Egg batch number</h3>
+      <p className="muted" style={{ marginTop: -4 }}>This batch code is stamped on every egg line of an invoice when you push it. The number ticks up automatically each new batch-day; you can also correct it here.</p>
+      {!batch ? <p className="muted">Loading…</p> : (
+        <div className="editor" style={{ flexDirection: "column", alignItems: "stretch", maxWidth: 420 }}>
+          <label className="fld"><span>Prefix (optional — e.g. producer code, leave blank for none)</span>
+            <input value={batch.batch_prefix} onChange={(e) => setBatch({ ...batch, batch_prefix: e.target.value })} placeholder="e.g. TTH or NSW123" />
+          </label>
+          <label className="wcheck" style={{ marginBottom: 10 }}>
+            <input type="checkbox" checked={batch.batch_include_date} onChange={(e) => setBatch({ ...batch, batch_include_date: e.target.checked })} />
+            include today's date (YYYYMMDD)
+          </label>
+          <label className="fld"><span>Current number (auto-increments; edit to reset)</span>
+            <input type="number" value={batch.batch_suffix_num} onChange={(e) => setBatch({ ...batch, batch_suffix_num: e.target.value })} />
+          </label>
+          <label className="fld"><span>Day rolls over at (hour, 24h — e.g. 6 = 6am, 0 = midnight)</span>
+            <input type="number" min="0" max="23" value={batch.batch_rollover_hour} onChange={(e) => setBatch({ ...batch, batch_rollover_hour: e.target.value })} />
+          </label>
+          <div className="picked-row" style={{ marginBottom: 10 }}>
+            Today's batch will read: <strong>{previewBatch()}</strong>
+          </div>
+          <button className="btn-primary" style={{ width: "auto" }} disabled={batchSaving} onClick={saveBatch}>
+            {batchSaving ? "Saving…" : "Save batch settings"}
+          </button>
+          {batchMsg && <div className={batchMsg.startsWith("✓") ? "ok" : "err"} style={{ marginTop: 8 }}>{batchMsg}</div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -287,6 +458,8 @@ function Admin() {
 function OrdersTab() {
   const [orders, setOrders] = useState([]);
   const [busy, setBusy] = useState(null);
+  const [editing, setEditing] = useState(null); // order id being edited
+  const [draftLines, setDraftLines] = useState([]); // working copy of lines
 
   async function load() {
     const { data } = await supabase
@@ -298,6 +471,45 @@ function OrdersTab() {
   useEffect(() => {
     load();
   }, []);
+
+  function startEdit(o) {
+    setEditing(o.id);
+    // deep copy so edits don't mutate the displayed order until saved
+    setDraftLines((o.lines || []).map((l) => ({ ...l })));
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setDraftLines([]);
+  }
+
+  function updateLine(i, field, raw) {
+    const next = draftLines.map((l) => ({ ...l }));
+    const v = parseFloat(String(raw).replace(/[^0-9.]/g, ""));
+    next[i][field] = isNaN(v) ? 0 : v;
+    next[i].line_total = Math.round((next[i].qty || 0) * (next[i].unit_price || 0) * 100) / 100;
+    setDraftLines(next);
+  }
+
+  const draftTotal = draftLines.reduce((s, l) => s + (l.line_total || 0), 0);
+
+  async function saveEdit(orderId) {
+    setBusy(orderId);
+    try {
+      const total = Math.round(draftTotal * 100) / 100;
+      const { error } = await supabase
+        .from("orders")
+        .update({ lines: draftLines, total })
+        .eq("id", orderId);
+      if (error) throw error;
+      cancelEdit();
+      await load();
+    } catch (e) {
+      alert("Couldn't save: " + e.message);
+    } finally {
+      setBusy(null);
+    }
+  }
 
   async function pushToXero(order) {
     setBusy(order.id);
@@ -315,6 +527,7 @@ function OrdersTab() {
           status: "invoiced",
           xero_invoice_id: out.invoiceId,
           xero_invoice_number: out.invoiceNumber,
+          egg_batch: out.eggBatch || null,
         })
         .eq("id", order.id);
       await load();
@@ -333,7 +546,9 @@ function OrdersTab() {
           Connect Xero
         </a>
       </div>
-      {orders.map((o) => (
+      {orders.map((o) => {
+        const isEditing = editing === o.id;
+        return (
         <div className="card" key={o.id}>
           <div className="card-top">
             <div>
@@ -344,36 +559,93 @@ function OrdersTab() {
               {new Date(o.created_at).toLocaleString("en-AU")}
             </div>
           </div>
+
           <table className="lines">
             <tbody>
-              {(o.lines || []).map((l, i) => (
+              {(isEditing ? draftLines : (o.lines || [])).map((l, i) => (
                 <tr key={i}>
-                  <td>{l.qty} × {l.name}</td>
-                  <td className="r">{AUD(l.line_total)}</td>
+                  {isEditing ? (
+                    <>
+                      <td>
+                        <input
+                          className="line-edit"
+                          inputMode="decimal"
+                          value={l.qty}
+                          onChange={(e) => updateLine(i, "qty", e.target.value)}
+                        />
+                        <span className="muted"> {l.unit} × {l.name}</span>
+                      </td>
+                      <td className="r">
+                        @ <input
+                          className="line-edit"
+                          inputMode="decimal"
+                          value={l.unit_price}
+                          onChange={(e) => updateLine(i, "unit_price", e.target.value)}
+                        />
+                      </td>
+                      <td className="r">{AUD(l.line_total)}</td>
+                    </>
+                  ) : (
+                    <>
+                      <td>{l.qty} {l.unit ? l.unit + " " : ""}× {l.name}</td>
+                      <td className="r muted">@ {AUD(l.unit_price)}</td>
+                      <td className="r">{AUD(l.line_total)}</td>
+                    </>
+                  )}
                 </tr>
               ))}
             </tbody>
           </table>
+
           {o.delivery_date && (
             <div className="muted">Deliver: {o.delivery_date}</div>
           )}
           {o.notes && <div className="muted">Note: {o.notes}</div>}
+          {o.egg_batch && (
+            <div className="batch-note">🥚 Egg batch: <strong>{o.egg_batch}</strong> (on invoice)</div>
+          )}
+
           <div className="card-foot">
-            <strong>{AUD(o.total)}</strong>
-            {o.status === "invoiced" ? (
-              <span className="ok">✓ {o.xero_invoice_number || "In Xero"}</span>
-            ) : (
-              <button
-                className="btn-primary sm"
-                disabled={busy === o.id}
-                onClick={() => pushToXero(o)}
-              >
-                {busy === o.id ? "Pushing…" : "Push to Xero"}
-              </button>
-            )}
+            <strong>{AUD(isEditing ? draftTotal : o.total)}</strong>
+            <div style={{ display: "flex", gap: 8 }}>
+              {o.status === "invoiced" ? (
+                <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                  <span className="ok">✓ {o.xero_invoice_number || "In Xero"}</span>
+                  {o.xero_invoice_id && (
+                    <a
+                      className="btn-ghost"
+                      href={`https://go.xero.com/app/invoicing/edit/${o.xero_invoice_id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      View / print in Xero ↗
+                    </a>
+                  )}
+                </div>
+              ) : isEditing ? (
+                <>
+                  <button className="btn-ghost" onClick={cancelEdit}>Cancel</button>
+                  <button className="btn-primary sm" disabled={busy === o.id} onClick={() => saveEdit(o.id)}>
+                    {busy === o.id ? "Saving…" : "Save changes"}
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button className="btn-ghost" onClick={() => startEdit(o)}>Edit</button>
+                  <button
+                    className="btn-primary sm"
+                    disabled={busy === o.id}
+                    onClick={() => pushToXero(o)}
+                  >
+                    {busy === o.id ? "Pushing…" : "Push to Xero"}
+                  </button>
+                </>
+              )}
+            </div>
           </div>
         </div>
-      ))}
+        );
+      })}
       {!orders.length && <p className="muted">No orders yet.</p>}
     </div>
   );
@@ -381,7 +653,7 @@ function OrdersTab() {
 
 function ProductsTab() {
   const [products, setProducts] = useState([]);
-  const blank = { name: "", category: "Mushrooms", unit: "kg", price: "", active: true };
+  const blank = { name: "", category: "Mushrooms", unit: "kg", price: "", active: true, sold_by_weight: false };
   const [form, setForm] = useState(blank);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState("");
@@ -409,65 +681,90 @@ function ProductsTab() {
   }
 
   async function save() {
-    if (!form.name || !form.price) return;
-    if (form.id) {
-      await supabase.from("products").update(form).eq("id", form.id);
-    } else {
-      await supabase.from("products").insert(form);
-    }
+    if (!form.id) return; // edit-only; no manual adds
+    await supabase.from("products").update({
+      category: form.category,
+      unit: form.unit,
+      sold_by_weight: form.sold_by_weight,
+      active: form.active,
+    }).eq("id", form.id);
     setForm(blank);
     load();
   }
-  async function del(id) {
-    if (!confirm("Delete product?")) return;
-    await supabase.from("products").delete().eq("id", id);
+  async function toggleActive(p) {
+    await supabase.from("products").update({ active: !p.active }).eq("id", p.id);
     load();
   }
+
+  // Xero "add item" page (new tab)
+  const XERO_ITEMS_URL = "https://go.xero.com/Items/Items.aspx";
 
   return (
     <div>
       <div className="bar">
         <h2>Products</h2>
-        <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
-          {syncing ? "Syncing…" : "⟳ Sync from Xero"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <a className="btn-ghost" href={XERO_ITEMS_URL} target="_blank" rel="noopener noreferrer">
+            + Add in Xero ↗
+          </a>
+          <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
+            {syncing ? "Syncing…" : "⟳ Sync from Xero"}
+          </button>
+        </div>
       </div>
+      <p className="muted" style={{ marginTop: -6, marginBottom: 14 }}>
+        Products come from Xero. Add new ones in Xero, then click Sync. Use “edit” below to set how each one is sold (by weight / count) and to show or hide it from chefs.
+      </p>
       {syncMsg && <div className={syncMsg.startsWith("✓") ? "ok" : "err"} style={{ marginBottom: 12 }}>{syncMsg}</div>}
-      <div className="editor">
-        <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
-          <option>Mushrooms</option>
-          <option>Eggs</option>
-          <option>Microgreens</option>
-          <option>Other</option>
-        </select>
-        <input placeholder="Unit (kg, dozen, punnet)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
-        <input placeholder="Price" type="number" step="0.01" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} />
-        <button className="btn-primary" onClick={save}>{form.id ? "Update" : "Add"}</button>
-        {form.id && <button className="btn-ghost" onClick={() => setForm(blank)}>Cancel</button>}
-      </div>
+
+      {form.id && (
+        <div className="editor" style={{ alignItems: "center" }}>
+          <strong style={{ marginRight: 4 }}>{form.name}</strong>
+          <span className="muted">{AUD(form.price)} (from Xero)</span>
+          <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
+            <option>Mushrooms</option>
+            <option>Eggs</option>
+            <option>Microgreens</option>
+            <option>Other</option>
+          </select>
+          <input style={{ maxWidth: 130 }} placeholder="Unit (kg, dozen)" value={form.unit} onChange={(e) => setForm({ ...form, unit: e.target.value })} />
+          <label className="wcheck">
+            <input type="checkbox" checked={!!form.sold_by_weight} onChange={(e) => setForm({ ...form, sold_by_weight: e.target.checked })} />
+            by weight
+          </label>
+          <button className="btn-primary" style={{ width: "auto" }} onClick={save}>Save</button>
+          <button className="btn-ghost" onClick={() => setForm(blank)}>Cancel</button>
+        </div>
+      )}
+
       <table className="grid">
-        <thead><tr><th>Name</th><th>Category</th><th>Unit</th><th className="r">Price</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Category</th><th>Unit</th><th>Sold by</th><th className="r">Price</th><th>Shown?</th><th></th></tr></thead>
         <tbody>
           {products.map((p) => (
-            <tr key={p.id}>
+            <tr key={p.id} style={{ opacity: p.active ? 1 : 0.5 }}>
               <td>{p.name}</td><td>{p.category}</td><td>{p.unit}</td>
+              <td>{p.sold_by_weight ? "weight" : "count"}</td>
               <td className="r">{AUD(p.price)}</td>
+              <td>
+                <button className="link" onClick={() => toggleActive(p)}>
+                  {p.active ? "shown" : "hidden"}
+                </button>
+              </td>
               <td className="r">
                 <button className="link" onClick={() => setForm(p)}>edit</button>
-                <button className="link danger" onClick={() => del(p.id)}>del</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      {!products.length && <p className="muted">No products yet — click “Sync from Xero”.</p>}
     </div>
   );
 }
 
 function CustomersTab() {
   const [customers, setCustomers] = useState([]);
-  const blank = { name: "", xero_contact_id: "", token: "" };
+  const blank = { name: "", xero_contact_id: "", token: "", email: "" };
   const [form, setForm] = useState(blank);
 
   // Xero contact search state
@@ -561,64 +858,83 @@ function CustomersTab() {
 
   const base = window.location.origin;
 
+  function inviteMessage(c) {
+    const link = `${base}/?c=${c.token}`;
+    return `Hi! You can now order fresh produce from Ten Thousand Harvests online.
+
+Your personal order page:
+${link}
+
+HOW TO ORDER
+Open the link, tap + to add items and quantities, pick a delivery date, then tap "Place order". That's it — we'll get it ready.
+
+SAVE IT TO YOUR PHONE (so it's one tap, like an app)
+iPhone (Safari): open the link, tap the Share button (square with an arrow), scroll down and tap "Add to Home Screen", then "Add".
+Android (Chrome): open the link, tap the ⋮ menu (top right), tap "Add to Home screen", then "Add".
+
+Or just bookmark the link in your browser if you prefer.
+
+Any questions, just reply here. Thanks!
+Ten Thousand Harvests`;
+  }
+
+  function copyInvite(c) {
+    navigator.clipboard.writeText(inviteMessage(c));
+  }
+
+  function emailInvite(c) {
+    const subject = encodeURIComponent("Your Ten Thousand Harvests order page");
+    const body = encodeURIComponent(inviteMessage(c));
+    const to = c.email ? encodeURIComponent(c.email) : "";
+    window.location.href = `mailto:${to}?subject=${subject}&body=${body}`;
+  }
+
   return (
     <div>
       <div className="bar">
         <h2>Customers</h2>
-        <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
-          {syncing ? "Syncing…" : "⟳ Sync all from Xero"}
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <a className="btn-ghost" href="https://go.xero.com/Contacts/" target="_blank" rel="noopener noreferrer">
+            + Add in Xero ↗
+          </a>
+          <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
+            {syncing ? "Syncing…" : "⟳ Sync all from Xero"}
+          </button>
+        </div>
       </div>
+      <p className="muted" style={{ marginTop: -6, marginBottom: 14 }}>
+        Customers come from Xero. Add a new contact in Xero, then click Sync. Use “edit” to add an email for sending invites.
+      </p>
       {syncMsg && <div className={syncMsg.startsWith("✓") ? "ok" : "err"} style={{ marginBottom: 12 }}>{syncMsg}</div>}
 
-      <div className="editor" style={{ flexDirection: "column", alignItems: "stretch" }}>
-        <div style={{ position: "relative" }}>
-          <input
-            placeholder="Search Xero for a business name…"
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPicked(false); setForm({ ...form, xero_contact_id: "" }); }}
-            autoComplete="off"
-          />
-          {searching && <div className="muted" style={{ marginTop: 4 }}>Searching Xero…</div>}
-          {searchErr && <div className="err">{searchErr}</div>}
-          {results.length > 0 && (
-            <div className="xresults">
-              {results.map((c) => (
-                <button key={c.id} className="xresult" onClick={() => pickContact(c)}>
-                  {c.name}
-                </button>
-              ))}
-            </div>
-          )}
+      {form.id && (
+        <div className="editor" style={{ alignItems: "center" }}>
+          <strong style={{ marginRight: 4 }}>{form.name}</strong>
+          <label className="fld" style={{ flex: 1, marginBottom: 0 }}>
+            <span>Chef's email (for invites)</span>
+            <input
+              type="email"
+              placeholder="chef@restaurant.com"
+              value={form.email || ""}
+              onChange={(e) => setForm({ ...form, email: e.target.value })}
+            />
+          </label>
+          <button className="btn-primary" style={{ width: "auto" }} onClick={save}>Save</button>
+          <button className="btn-ghost" onClick={resetForm}>Cancel</button>
         </div>
-
-        {form.xero_contact_id && (
-          <div className="picked-row">
-            ✓ Linked to Xero: <strong>{form.name}</strong>
-            <span className="muted"> ({form.xero_contact_id.slice(0, 8)}…)</span>
-          </div>
-        )}
-
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button className="btn-primary" style={{ width: "auto" }} onClick={save} disabled={!form.xero_contact_id}>
-            {form.id ? "Update customer" : "Add customer"}
-          </button>
-          {(form.id || search) && <button className="btn-ghost" onClick={resetForm}>Clear</button>}
-        </div>
-        {!form.xero_contact_id && search.length >= 2 && !searching && results.length === 0 && !searchErr && (
-          <div className="muted" style={{ marginTop: 6 }}>No Xero match — check the spelling, or the contact may not exist in Xero yet.</div>
-        )}
-      </div>
+      )}
 
       <table className="grid">
-        <thead><tr><th>Name</th><th>Order link</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Email</th><th>Invite</th><th></th></tr></thead>
         <tbody>
           {customers.map((c) => (
             <tr key={c.id}>
               <td>{c.name}</td>
+              <td className="muted">{c.email || "—"}</td>
               <td>
-                <code className="link-code">{base}/?c={c.token}</code>
-                <button className="link" onClick={() => navigator.clipboard.writeText(`${base}/?c=${c.token}`)}>copy</button>
+                <button className="link" onClick={() => copyInvite(c)}>copy invite</button>
+                <button className="link" onClick={() => emailInvite(c)}>email</button>
+                <button className="link" onClick={() => navigator.clipboard.writeText(`${base}/?c=${c.token}`)}>copy link</button>
               </td>
               <td className="r"><button className="link" onClick={() => editCustomer(c)}>edit</button></td>
             </tr>
