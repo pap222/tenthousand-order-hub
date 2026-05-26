@@ -5,16 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#2f4a3c" />
+    <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="TTH Orders" />
-    <link rel="apple-touch-icon" href="/icon-192.png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" href="/icon-192.png" />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Mulish:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <title>Ten Thousand Harvests — Orders</title>
+    <style>
+      #app-splash {
+        position: fixed; inset: 0; z-index: 9999;
+        background: #2f4a3c; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 18px;
+        transition: opacity 0.4s ease;
+      }
+      #app-splash img { width: 120px; height: auto; filter: brightness(0) invert(1); }
+      #app-splash .s-name {
+        font-family: 'Cormorant Garamond', serif; color: #f7f3e9;
+        font-size: 26px; font-weight: 600; letter-spacing: 0.5px;
+      }
+      #app-splash .s-sub {
+        font-family: 'Mulish', sans-serif; color: rgba(247,243,233,0.7);
+        font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin-top: -10px;
+      }
+      #app-splash.hide { opacity: 0; pointer-events: none; }
+    </style>
   </head>
   <body>
+    <div id="app-splash">
+      <img src="/logo.png" alt="" />
+      <div class="s-name">Ten Thousand Harvests</div>
+      <div class="s-sub">Micro Farming · Oura NSW</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.jsx"></script>
   </body>
