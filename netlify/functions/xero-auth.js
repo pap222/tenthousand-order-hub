@@ -10,6 +10,8 @@ exports.handler = async (event) => {
     "profile",
     "email",
     "accounting.invoices",
+    "accounting.contacts.read",
+    "accounting.settings.read",
     "offline_access",
   ].join(" ");
 

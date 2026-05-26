@@ -383,12 +383,30 @@ function ProductsTab() {
   const [products, setProducts] = useState([]);
   const blank = { name: "", category: "Mushrooms", unit: "kg", price: "", active: true };
   const [form, setForm] = useState(blank);
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
 
   async function load() {
     const { data } = await supabase.from("products").select("*").order("name");
     setProducts(data || []);
   }
   useEffect(() => { load(); }, []);
+
+  async function syncFromXero() {
+    setSyncing(true);
+    setSyncMsg("");
+    try {
+      const res = await fetch("/.netlify/functions/xero-sync-products");
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || "Sync failed");
+      setSyncMsg(`✓ ${out.added} added, ${out.updated} updated (${out.total} Xero items)`);
+      load();
+    } catch (e) {
+      setSyncMsg("Sync failed: " + e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function save() {
     if (!form.name || !form.price) return;
@@ -408,7 +426,13 @@ function ProductsTab() {
 
   return (
     <div>
-      <h2>Products</h2>
+      <div className="bar">
+        <h2>Products</h2>
+        <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
+          {syncing ? "Syncing…" : "⟳ Sync from Xero"}
+        </button>
+      </div>
+      {syncMsg && <div className={syncMsg.startsWith("✓") ? "ok" : "err"} style={{ marginBottom: 12 }}>{syncMsg}</div>}
       <div className="editor">
         <input placeholder="Name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
         <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value })}>
@@ -446,14 +470,77 @@ function CustomersTab() {
   const blank = { name: "", xero_contact_id: "", token: "" };
   const [form, setForm] = useState(blank);
 
+  // Xero contact search state
+  const [search, setSearch] = useState("");
+  const [results, setResults] = useState([]);
+  const [searching, setSearching] = useState(false);
+  const [searchErr, setSearchErr] = useState("");
+  const [picked, setPicked] = useState(false); // a Xero contact has been chosen
+  const [syncing, setSyncing] = useState(false);
+  const [syncMsg, setSyncMsg] = useState("");
+
   async function load() {
     const { data } = await supabase.from("customers").select("*").order("name");
     setCustomers(data || []);
   }
   useEffect(() => { load(); }, []);
 
+  async function syncFromXero() {
+    setSyncing(true);
+    setSyncMsg("");
+    try {
+      const res = await fetch("/.netlify/functions/xero-sync-contacts");
+      const out = await res.json();
+      if (!res.ok) throw new Error(out.error || "Sync failed");
+      setSyncMsg(`✓ ${out.added} added, ${out.updated} updated (${out.total} Xero customers)`);
+      load();
+    } catch (e) {
+      setSyncMsg("Sync failed: " + e.message);
+    } finally {
+      setSyncing(false);
+    }
+  }
+
+  // debounced Xero search as you type
+  useEffect(() => {
+    if (picked || search.trim().length < 2) { setResults([]); return; }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      setSearchErr("");
+      try {
+        const res = await fetch(
+          "/.netlify/functions/xero-contacts?q=" + encodeURIComponent(search.trim())
+        );
+        const out = await res.json();
+        if (!res.ok) throw new Error(out.error || "Search failed");
+        setResults(out.contacts || []);
+      } catch (e) {
+        setSearchErr(e.message);
+        setResults([]);
+      } finally {
+        setSearching(false);
+      }
+    }, 350);
+    return () => clearTimeout(t);
+  }, [search, picked]);
+
+  function pickContact(c) {
+    setForm({ ...form, name: c.name, xero_contact_id: c.id });
+    setSearch(c.name);
+    setPicked(true);
+    setResults([]);
+  }
+
   function genToken() {
     return Math.random().toString(36).slice(2, 10);
+  }
+
+  function resetForm() {
+    setForm(blank);
+    setSearch("");
+    setResults([]);
+    setPicked(false);
+    setSearchErr("");
   }
 
   async function save() {
@@ -461,21 +548,68 @@ function CustomersTab() {
     const payload = { ...form, token: form.token || genToken() };
     if (form.id) await supabase.from("customers").update(payload).eq("id", form.id);
     else await supabase.from("customers").insert(payload);
-    setForm(blank);
+    resetForm();
     load();
+  }
+
+  function editCustomer(c) {
+    setForm(c);
+    setSearch(c.name);
+    setPicked(true);
+    setResults([]);
   }
 
   const base = window.location.origin;
 
   return (
     <div>
-      <h2>Customers</h2>
-      <div className="editor">
-        <input placeholder="Business name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-        <input placeholder="Xero Contact ID" value={form.xero_contact_id} onChange={(e) => setForm({ ...form, xero_contact_id: e.target.value })} />
-        <button className="btn-primary" onClick={save}>{form.id ? "Update" : "Add"}</button>
-        {form.id && <button className="btn-ghost" onClick={() => setForm(blank)}>Cancel</button>}
+      <div className="bar">
+        <h2>Customers</h2>
+        <button className="btn-ghost" onClick={syncFromXero} disabled={syncing}>
+          {syncing ? "Syncing…" : "⟳ Sync all from Xero"}
+        </button>
       </div>
+      {syncMsg && <div className={syncMsg.startsWith("✓") ? "ok" : "err"} style={{ marginBottom: 12 }}>{syncMsg}</div>}
+
+      <div className="editor" style={{ flexDirection: "column", alignItems: "stretch" }}>
+        <div style={{ position: "relative" }}>
+          <input
+            placeholder="Search Xero for a business name…"
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPicked(false); setForm({ ...form, xero_contact_id: "" }); }}
+            autoComplete="off"
+          />
+          {searching && <div className="muted" style={{ marginTop: 4 }}>Searching Xero…</div>}
+          {searchErr && <div className="err">{searchErr}</div>}
+          {results.length > 0 && (
+            <div className="xresults">
+              {results.map((c) => (
+                <button key={c.id} className="xresult" onClick={() => pickContact(c)}>
+                  {c.name}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {form.xero_contact_id && (
+          <div className="picked-row">
+            ✓ Linked to Xero: <strong>{form.name}</strong>
+            <span className="muted"> ({form.xero_contact_id.slice(0, 8)}…)</span>
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+          <button className="btn-primary" style={{ width: "auto" }} onClick={save} disabled={!form.xero_contact_id}>
+            {form.id ? "Update customer" : "Add customer"}
+          </button>
+          {(form.id || search) && <button className="btn-ghost" onClick={resetForm}>Clear</button>}
+        </div>
+        {!form.xero_contact_id && search.length >= 2 && !searching && results.length === 0 && !searchErr && (
+          <div className="muted" style={{ marginTop: 6 }}>No Xero match — check the spelling, or the contact may not exist in Xero yet.</div>
+        )}
+      </div>
+
       <table className="grid">
         <thead><tr><th>Name</th><th>Order link</th><th></th></tr></thead>
         <tbody>
@@ -486,7 +620,7 @@ function CustomersTab() {
                 <code className="link-code">{base}/?c={c.token}</code>
                 <button className="link" onClick={() => navigator.clipboard.writeText(`${base}/?c=${c.token}`)}>copy</button>
               </td>
-              <td className="r"><button className="link" onClick={() => setForm(c)}>edit</button></td>
+              <td className="r"><button className="link" onClick={() => editCustomer(c)}>edit</button></td>
             </tr>
           ))}
         </tbody>
