@@ -700,10 +700,17 @@ function OrdersTab() {
     load();
   }, []);
 
-  async function setShipped(orderId, value) {
-    setBusy(orderId);
+  async function setShipped(order, value) {
+    // Warn if shipping an order that hasn't been invoiced yet.
+    if (value && order.status !== "invoiced") {
+      const ok = confirm(
+        `⚠️ This order for ${order.customer_name} hasn't been pushed to Xero yet — no invoice has been created.\n\nMark it shipped anyway? (The customer won't be billed unless you push it to Xero first.)`
+      );
+      if (!ok) return;
+    }
+    setBusy(order.id);
     try {
-      await supabase.from("orders").update({ archived: value }).eq("id", orderId);
+      await supabase.from("orders").update({ archived: value }).eq("id", order.id);
       await load();
     } catch (e) {
       alert("Couldn't update: " + e.message);
@@ -953,11 +960,11 @@ function OrdersTab() {
               )}
               {!isEditing && (
                 o.archived ? (
-                  <button className="btn-ghost" disabled={busy === o.id} onClick={() => setShipped(o.id, false)}>
+                  <button className="btn-ghost" disabled={busy === o.id} onClick={() => setShipped(o, false)}>
                     {busy === o.id ? "…" : "Move to active"}
                   </button>
                 ) : (
-                  <button className="btn-primary sm" disabled={busy === o.id} onClick={() => setShipped(o.id, true)}>
+                  <button className="btn-primary sm" disabled={busy === o.id} onClick={() => setShipped(o, true)}>
                     {busy === o.id ? "…" : "Mark shipped"}
                   </button>
                 )
